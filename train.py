@@ -26,12 +26,12 @@ def predict_logits(model, X, batch_size=config.BATCH_SIZE):
 
 
 def evaluate(model, X, y):
-    """Per-window losses (numpy array) and accuracy."""
+    """Per-window logits and losses (numpy arrays) and accuracy."""
     logits = predict_logits(model, X)
     losses = F.binary_cross_entropy_with_logits(logits, y, reduction="none")
     predictions = (logits >= 0).float()
     accuracy = (predictions == y).float().mean().item()
-    return losses.cpu().numpy(), accuracy
+    return logits.cpu().numpy(), losses.cpu().numpy(), accuracy
 
 
 def train_model(model, train_data, val_data, epochs, seed):
@@ -59,7 +59,7 @@ def train_model(model, train_data, val_data, epochs, seed):
             loss.backward()
             optimizer.step()
 
-        val_losses, _ = evaluate(model, X_val, y_val)
+        _, val_losses, _ = evaluate(model, X_val, y_val)
         val_loss = val_losses.mean()
         if val_loss < best_val_loss - 1e-4:
             best_val_loss = val_loss

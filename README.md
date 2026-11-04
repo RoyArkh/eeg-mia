@@ -3,12 +3,25 @@
 Membership inference attacks (MIA) on EEG models: a clean rewrite of the MoBI
 experiments behind the HEALTHINF paper ("Understanding Membership Inference
 Attacks on EEG Models"). The original code is in `../mia_bci` (see
-`../mia_bci/guide.md`).
+`../guide.md`).
 
 The task: a CNN learns to tell whether a 2.5 s EEG window was recorded while a
-child was **resting** (label 0) or **playing a video game** (label 1). The LOSS
-attack then tries to tell the model's training windows (members) apart from
-held-out test windows (non-members), using only the model's loss on each window.
+child was **resting** (label 0) or **playing a video game** (label 1). The
+attacks then try to tell the model's training windows (members) apart from
+held-out test windows (non-members), using only the model's output on each
+window.
+
+The dataset, the models and the attacks can each be chosen from the command
+line. Each one lives in its own file:
+
+```
+datasets/   mobi.py
+models/     eegnet.py  shallow_convnet.py  conv1d.py  eegnet2tl.py  tidnet.py
+            eeg_inception.py  test_network.py
+attacks/    loss.py  confidence.py  max_confidence.py  modified_entropy.py  lira.py
+```
+
+See `HOW_IT_WORKS.md` for diagrams of how the pieces fit together.
 
 ## Setup
 
@@ -28,18 +41,22 @@ result can be traced to the same environment.
 ## Check that everything works
 
 ```bash
-uv run pytest                    # about a minute
-uv run python models.py          # parameter count and output shape of each model
+uv run pytest                    # about 10 seconds
 ```
 
 The tests check that:
-- the windows are identical to the original code's (same count per participant
-  and split, at all 5 overlaps),
+- the MoBI windows are identical to the original code's (same count per
+  participant and split, at all 5 overlaps),
 - no train window shares a sample with a val or test window,
-- every model returns one logit per window,
-- the attack gives AUC 1.0 when members and non-members are fully separable,
-  and about 0.5 when they are not,
-- one short training run works end to end.
+- every model returns one logit per window and has exactly the original
+  model's number of parameters,
+- every simple attack gives AUC 1.0 when members and non-members are fully
+  separable, and about 0.5 when they are not,
+- loss, confidence and modified entropy give identical results (as they must on
+  a binary model), while max confidence does not,
+- LiRA beats the loss attack on made-up data where it should,
+- one short training run with every attack (LiRA with 6 shadow models) works end
+  to end, and results files are named and written correctly.
 
 ## Run
 
@@ -49,33 +66,173 @@ All commands run from the `eeg-mia-roya` folder. Every script accepts `--help`.
 
 ```bash
 uv run python run_single.py --model EEGNet
-uv run python run_single.py --model ShallowConvNet --participants 1 2 3 4 5
+uv run python run_single.py --model TIDNet --participants 1 2 3 4 5 --stride 69
+uv run python run_single.py --model EEGNet --attacks loss max_confidence
 ```
 
 It prints the number of windows, train/val/test loss and accuracy, the
-generalization gaps, and the attack's AUC and TPR at 1% FPR.
+generalization gaps, and each attack's AUC and TPR at 1% FPR.
 
 **Participant sweep** (paper Experiment 1: train on 2–10 participants, 5 random
-participant combinations each, all 3 models):
+participant combinations each):
 
 ```bash
 uv run python run_participant_sweep.py --stride 275
+uv run python run_participant_sweep.py --models all --attacks all --stride 1
 ```
 
-Results are written to `results/participant_sweep_stride275.csv`, one row per
-trained model. The CSV is re-saved after every run, so a crash keeps what was
-already done.
+**What you can choose** (both scripts):
 
-**Compare with the original results:**
+| flag | choices | default |
+|---|---|---|
+| `--dataset` | `mobi` | `mobi` |
+| `--model` / `--models` | `EEGNet`, `ShallowConvNet`, `Conv1DModel`, `EEGNet2TL`, `TIDNet`, `EEGInception`, `TestNetwork` (sweep also: `all`) | single: `EEGNet`; sweep: `EEGNet ShallowConvNet Conv1DModel` |
+| `--attacks` | `loss`, `confidence`, `max_confidence`, `modified_entropy`, `lira`, or `all` | all but `lira` |
+| `--stride` | window stride in samples (see below) | 275 |
+| `--epochs` | maximum training epochs (early stopping on val loss) | 50 |
+| `--shadows` | shadow models for LiRA | 64 |
+| `--device` | `auto`, `cpu`, `cuda`, `mps` | `auto` (CUDA if available) |
+
+## Sample run commands
+
+All commands run from the `eeg-mia-roya` folder (`~/eeg-mia` on the
+workstation).
+
+**Quick checks**
 
 ```bash
-uv run python summarize.py results/participant_sweep_stride275.csv \
+uv run pytest                                  # all tests, about 10 s
+uv run python run_single.py --model EEGNet     # one model at stride 275, ~30 s on a laptop CPU
+uv run python run_single.py --help             # every option
+```
+
+**One model**
+
+```bash
+# another model, fewer participants, 75% overlap
+uv run python run_single.py --model TIDNet --participants 1 2 3 4 5 --stride 69
+
+# only some attacks
+uv run python run_single.py --model EEGNet --attacks loss max_confidence
+
+# the paper's main MoBI setting (99.6% overlap): use the GPU
+uv run python run_single.py --model EEGNet --stride 1
+
+# TestNetwork (from the command line it has its default size: 40 filters, 2 layers)
+uv run python run_single.py --model TestNetwork
+
+# a quick LiRA test with few shadow models and short training
+uv run python run_single.py --model Conv1DModel --attacks loss lira --shadows 8 --epochs 5
+```
+
+**Participant sweeps**
+
+```bash
+# the default: 3 models, every attack except LiRA, no overlap
+uv run python run_participant_sweep.py
+
+# all 7 models at the paper's main overlap
+uv run python run_participant_sweep.py --models all --stride 1
+
+# only the six models of the paper
+uv run python run_participant_sweep.py --models EEGNet ShallowConvNet Conv1DModel EEGNet2TL TIDNet EEGInception
+
+# a small, fast sweep to test that things work
+uv run python run_participant_sweep.py --models Conv1DModel --counts 3 5 --combos 2 --epochs 3
+
+# 20 participant combinations per count, like the original stride-275 run
+uv run python run_participant_sweep.py --combos 20
+
+# LiRA on top of the other attacks (64 shadow models per target: GPU, and slow)
+uv run python run_participant_sweep.py --attacks all --stride 275
+```
+
+**Every model at every overlap, every attack except LiRA**
+
+```bash
+for stride in 275 206 138 69 1; do
+    uv run python run_participant_sweep.py --models all --stride $stride \
+        --attacks loss confidence max_confidence modified_entropy
+done 2>&1 | tee -a sweep_all.log
+```
+
+Each stride writes its own results file. `tee` also keeps the printed output in
+`sweep_all.log`.
+
+**Long runs on the workstation**
+
+```bash
+ssh labws                        # on your Mac
+tmux new -s sweep                # the run keeps going after you disconnect
+cd ~/eeg-mia && git pull
+# ... start the run here ...
+# detach: Ctrl-b, then d    reattach later: tmux attach -t sweep
+nvidia-smi                       # in another window: your python process should show type C
+```
+
+**Looking at results**
+
+```bash
+uv run python summarize.py results/<file>.csv
+uv run python summarize.py results/*stride275*.csv          # several files combined
+scp -r labws:~/eeg-mia/results ./results_workstation        # on your Mac: copy results back
+```
+
+## Results
+
+Every run writes a **new file** in `results/`, named
+
+```
+<date>_<time>_<models>_<attacks>_<dataset>-stride<N>-epochs<N>.csv
+e.g. 2026-11-04_19-30-12_EEGNet+TIDNet_loss+lira_mobi-stride275-epochs50.csv
+```
+
+One row per trained model. Each row holds:
+- the run's settings: dataset, stride, window, epochs, batch size, learning
+  rate, weight decay, dropout, patience, the full command,
+- where it ran: computer, device, Python/torch/braindecode/numpy versions, git
+  commit (`-dirty` means the code had uncommitted changes),
+- the results: participants, seed, window counts, epochs run, train/val/test loss
+  and accuracy, loss and accuracy gaps, and `<attack>_auc` and `<attack>_tpr` for
+  every attack.
+
+A sweep re-saves its file after every trained model, so a crash keeps what was
+already done.
+
+**Summarize** one or more results files, optionally next to the original results:
+
+```bash
+uv run python summarize.py results/<file>.csv
+uv run python summarize.py results/<file>.csv \
     --reference ../mia_bci/experiment1_out/exp1_runs_stride275.csv
 ```
 
-This prints, for both runs side by side: mean attack AUC per number of
-participants, means per model, and the correlation of attack AUC with the loss
-gap, the accuracy gap and the number of participants (paper Figs 1 and 2).
+This prints, for each attack: mean AUC per number of participants and model,
+means per model, and the correlation of the AUC with the loss gap, the accuracy
+gap and the number of participants (paper Figs 1 and 2). Files from before the
+`attacks/` folder existed (with an `attack_auc` column) are read as loss-attack
+results.
+
+## The attacks
+
+| attack | score (higher = "member") | notes |
+|---|---|---|
+| `loss` | −BCE loss | Yeom et al. 2018 |
+| `confidence` | probability of the **true** class | what `mia_bci/attacks.py` computed |
+| `max_confidence` | probability of the **top** class | HEALTHINF Eq. 4; ignores the label |
+| `modified_entropy` | −modified entropy | Song & Mittal 2021 |
+| `lira` | z-score of the target's output against shadow models that did not train on the window | Carlini et al. 2022, offline; HEALTHINF Eq. 6 |
+
+On a model with one output for two classes, `loss`, `confidence` and
+`modified_entropy` all rank windows by the probability of the true class, so
+they always give the **same** AUC and TPR. Only `max_confidence` and `lira` can
+differ from `loss`.
+
+**LiRA** trains `--shadows` extra models (64 by default) for **every** target
+model, so a run takes dozens of times longer. Each shadow model trains like the
+target on a random half of the train + test windows. See the docstring at the
+top of `attacks/lira.py` for how it differs from `mia_bci/LiRA.ipynb` and for a
+known limitation at high overlap.
 
 ## Overlap (`--stride`)
 
@@ -86,9 +243,6 @@ gap, the accuracy gap and the number of participants (paper Figs 1 and 2).
 | 138 | 50% | laptop |
 | 69 | 75% | laptop |
 | 1 | 99.6% (paper's main MoBI setting) | GPU recommended (the original code took up to ~30 min per model on CPU) |
-
-Use `--device mps` to try the Apple GPU, or `--device cuda` on a cloud GPU. The
-default is CUDA if available, otherwise CPU.
 
 ## What to expect
 
@@ -114,18 +268,23 @@ The original runs (`../mia_bci/experiment1_out/`) give these averages:
 
 ## Files
 
-| file | what it does |
+| file or folder | what it does |
 |---|---|
-| `config.py` | all default settings in one place |
-| `data.py` | loads `SubjectN.npz`, finds windows with good electrode contact, splits each recording by time into train/val/test, balances rest/game, cuts and normalizes windows |
-| `models.py` | EEGNet and ShallowConvNet (from braindecode) and Conv1DModel |
-| `train.py` | training loop with early stopping; per-window loss and accuracy |
-| `attacks.py` | LOSS attack, AUC and TPR at 1% FPR |
-| `pipeline.py` | `run_one()`: windows → train → evaluate → attack, for one model and one participant set |
+| `config.py` | default training, attack and results settings |
+| `datasets/` | one file per dataset: loading, windowing, train/val/test split, normalization. `mobi.py` holds the MoBI settings (window, stride, participants) |
+| `models/` | one file per model, each with a `build()` function |
+| `attacks/` | one file per attack, each with a `scores()` function; `__init__.py` runs them and computes AUC and TPR |
+| `train.py` | training loop with early stopping; per-window logits, loss and accuracy |
+| `pipeline.py` | `run_one()`: windows → train → evaluate → attacks, for one model and one participant set; also trains LiRA's shadow models |
+| `recording.py` | results file names and contents |
 | `run_single.py` | one run, printed in detail |
-| `run_participant_sweep.py` | the participant-count experiment, saved as CSV |
+| `run_participant_sweep.py` | the participant-count experiment |
 | `summarize.py` | summary tables and correlations; optional comparison with the original CSV |
-| `tests/test_pipeline.py` | the checks listed above |
+| `tests/` | the checks listed above, one file per folder plus an end-to-end test |
+
+**Adding a dataset, model or attack:** write one new file in the folder and add
+one line to the dictionary in that folder's `__init__.py`. The docstring at the
+top of each `__init__.py` says what the new file must provide.
 
 ## Same as the original code
 
@@ -139,6 +298,7 @@ The original runs (`../mia_bci/experiment1_out/`) give these averages:
   dropout 0.2, early stopping on val loss (patience 8), best weights restored.
 - Attack: members are train windows and non-members are test windows, with
   equal numbers of each.
+- The six models and TestNetwork have exactly the original parameter counts.
 
 ## Different from the original code
 
@@ -150,9 +310,14 @@ The original runs (`../mia_bci/experiment1_out/`) give these averages:
   accept: EEGNet's `third_kernel_size` and ShallowConvNet's `pool_nonlin` never
   took effect, so they are not passed here either.
 - braindecode is pinned to 1.6.1. The original runs used a bundled 1.6.0dev0
-  copy (`../mia_bci/braindecode/`), which has the same model signatures.
+  copy (`../mia_bci/braindecode/`), which has the same model signatures and
+  defaults.
 - Participant combinations are drawn with NumPy instead of Python's `random`,
   so they differ from the original runs.
-- No mixed precision or DataLoader workers. Runs use CPU by default on the Mac.
-- Only the LOSS attack for now. The paper found the confidence and modified
-  entropy attacks nearly identical to it on this binary task.
+- No mixed precision or DataLoader workers.
+- The attack scores are computed from the logits without clipping
+  probabilities (the original clipped them to [1e-7, 1 − 1e-7]), so very
+  confident windows are no longer tied.
+- LiRA attacks the same target model and windows as the other attacks, and
+  uses the logit-scaled confidence of HEALTHINF Eq. 6 by default (the notebook
+  used the loss). See `attacks/lira.py`.

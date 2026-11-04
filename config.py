@@ -1,26 +1,23 @@
-"""Default settings. They follow the original HEALTHINF code (mia_bci/exp1_run.ipynb)."""
+"""Default settings for training, attacks and results.
+
+Dataset settings (window length, stride, participants, ...) are in the dataset's own
+file in datasets/. Training settings follow the original HEALTHINF code
+(mia_bci/exp1_run.ipynb).
+"""
 
 import os
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(PROJECT_DIR, "data", "mobi")
-RESULTS_DIR = os.path.join(PROJECT_DIR, "results")
+DATA_ROOT = os.path.join(PROJECT_DIR, "data")         # each dataset has a subfolder
+RESULTS_DIR = os.path.join(PROJECT_DIR, "results")    # one CSV per experiment run
 
-# MoBI dataset: the 11 participants with both rest and game recordings
-PARTICIPANTS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 13]
-SAMPLING_RATE = 110   # Hz
-WINDOW = 275          # samples (2.5 s)
-STRIDE = 275          # 275 = no overlap, 1 = 99.6% overlap (the paper's main MoBI setting)
-
-# windowing and splitting
-MAX_BAD_FRACTION = 0.30    # drop windows where >30% of samples have poor electrode contact
-TRAIN_FRACTION = 0.70
-VAL_FRACTION = 0.15        # the remaining 15% is test
-MIN_WINDOWS_TO_SPLIT = 8   # recordings with fewer windows go entirely to train
-Z_CLIP = 4.0               # z-scored windows are clipped to +-4
+# what runs by default (all choices: see datasets/, models/ and attacks/)
+DATASET = "mobi"
+MODELS = ["EEGNet", "ShallowConvNet", "Conv1DModel"]
+# LiRA is not run by default because it trains extra shadow models (64 by default) per target model
+ATTACKS = ["loss", "confidence", "max_confidence", "modified_entropy"]
 
 # training
-MODELS = ["EEGNet", "ShallowConvNet", "Conv1DModel"]
 EPOCHS = 50
 BATCH_SIZE = 128
 LEARNING_RATE = 1e-3
@@ -28,5 +25,8 @@ WEIGHT_DECAY = 0.0
 DROPOUT = 0.2
 PATIENCE = 8               # early stopping: epochs without validation improvement
 MIN_SPLIT_SIZE = 10        # skip a run if train, val or test has fewer windows
+
+# attacks
+TARGET_FPR = 0.01          # TPR is reported at this false positive rate
 
 SEED = 0
