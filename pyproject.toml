@@ -1,0 +1,23 @@
+[project]
+name = "eeg-mia"
+version = "0.1.0"
+description = "Membership inference attacks on EEG models (MoBI dataset)"
+requires-python = "==3.12.*"
+dependencies = [
+    "braindecode==1.6.1",
+    "torch",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
