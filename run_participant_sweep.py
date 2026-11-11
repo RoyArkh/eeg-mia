@@ -57,7 +57,8 @@ def main():
     info = recording.run_info("participant_sweep", dataset, device, args.epochs)
 
     participants = dataset.participants
-    counts = args.counts or list(range(2, len(participants)))
+    counts = args.counts or getattr(dataset, "default_counts", None) or list(range(2, len(participants)))
+    counts = [n for n in counts if n <= len(participants)]
     rng = np.random.default_rng(args.seed)
     plan = []
     for n in counts:

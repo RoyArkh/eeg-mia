@@ -15,7 +15,7 @@ The dataset, the models and the attacks can each be chosen from the command
 line. Each one lives in its own file:
 
 ```
-datasets/   mobi.py
+datasets/   mobi.py  sleepedf.py  eegmmidb.py  tuab.py  (segments.py: shared code of the last three)
 models/     eegnet.py  shallow_convnet.py  conv1d.py  eegnet2tl.py  tidnet.py
             eeg_inception.py  test_network.py
 attacks/    loss.py  confidence.py  max_confidence.py  modified_entropy.py  lira.py
@@ -85,13 +85,69 @@ uv run python run_participant_sweep.py --models all --attacks all --stride 1
 
 | flag | choices | default |
 |---|---|---|
-| `--dataset` | `mobi` | `mobi` |
+| `--dataset` | `mobi`, `sleepedf`, `eegmmidb`, `tuab` | `mobi` |
 | `--model` / `--models` | `EEGNet`, `ShallowConvNet`, `Conv1DModel`, `EEGNet2TL`, `TIDNet`, `EEGInception`, `TestNetwork` (sweep also: `all`) | single: `EEGNet`; sweep: `EEGNet ShallowConvNet Conv1DModel` |
 | `--attacks` | `loss`, `confidence`, `max_confidence`, `modified_entropy`, `lira`, or `all` | all but `lira` |
 | `--stride` | window stride in samples (see below) | 275 |
 | `--epochs` | maximum training epochs (early stopping on val loss) | 50 |
 | `--shadows` | shadow models for LiRA | 64 |
 | `--device` | `auto`, `cpu`, `cuda`, `mps` | `auto` (CUDA if available) |
+
+## Other datasets: Sleep-EDF, EEGMMIDB, TUAB
+
+Besides MoBI, three public datasets can be used. Each is converted once with
+`prepare_data.py` into one `.npz` file per recording in `data/<dataset>/`. The
+experiment scripts then take `--dataset sleepedf`, `eegmmidb` or `tuab`.
+
+| | `sleepedf` | `eegmmidb` | `tuab` |
+|---|---|---|---|
+| data | Sleep-EDF Expanded, Sleep Cassette: 78 healthy people aged 25–101, 2 nights each | PhysioNet EEG Motor Movement/Imagery: 105 people | TUH Abnormal EEG: ~2,000 hospital patients |
+| binary task | N2 (0) vs REM (1) sleep | imagined left (0) vs right (1) fist, runs 4, 8, 12 | normal (0) vs abnormal (1) |
+| channels | Fpz-Cz, Pz-Oz, 100 Hz | 16 over the motor cortex, 160 Hz, 1–40 Hz | 16 bipolar (TCP montage), 0.5–45 Hz, resampled to 100 Hz |
+| window | 30 s = one scored epoch (3000 samples) | the first 4 s of a trial (640) | 10 s (1000) |
+| `--stride` | 3000 = no overlap (default), 1500 = 50% | always one window per trial, no overlap | 1000 = no overlap (default), 500 = 50% |
+| members / non-members | each night cut into 10-min blocks that go to train/val/test (70/15/15) in a fixed random order, so every split covers the whole night | each person's 3 runs one after the other, split in time order | **split by patient**: members are training patients, non-members held-out patients |
+| default sweep counts | 2 5 10 20 40 70 | 2 5 10 25 50 100 | 20 50 100 200 |
+| download | open, ~8 GB, automatic | open, ~0.8 GB, automatic | free registration, ~60 GB, by hand |
+
+Differences from MoBI:
+- **Normalization per recording, not per window.** Each channel of a whole night,
+  run or session is centered on its median, divided by its IQR-based standard
+  deviation and clipped to ±10. Z-scoring each window, as for MoBI, would erase
+  what these tasks depend on: the amplitude of sleep waves, abnormal slowing, and
+  the power difference between left and right motor cortex.
+- **A window has a single label.** Windows start where a stretch of one label
+  starts (a sleep epoch, a trial), so they line up with the scoring.
+- **Sleep-EDF is split in 10-minute blocks**, not in one block per split: deep sleep
+  comes early in the night and REM late, so with MoBI's split (last 15% = test) val
+  and test held very different stages, and val sometimes no REM at all.
+- **TUAB is split by patient**, because its label belongs to the whole recording:
+  with a time split, the model could get test windows right by recognizing the
+  patient.
+- Model sizes depend on the window length (layers that span the whole window grow),
+  so the models are no longer all ~10K parameters; `n_params` in the results says
+  how big each one was.
+
+**Prepare the data** (once, on the machine that runs the experiments):
+
+```bash
+uv run python prepare_data.py eegmmidb            # ~10 min
+uv run python prepare_data.py sleepedf            # downloads ~8 GB; can take an hour or more
+uv run python prepare_data.py tuab --raw /path/to/tuh_eeg_abnormal/v3.0.1/edf
+uv run python prepare_data.py sleepedf --subjects 0 1   # a quick test with 2 people
+```
+
+Raw downloads go to `data/raw/<dataset>/` and can be deleted afterwards.
+
+**Check the data** before training:
+
+```bash
+uv run python inspect_data.py sleepedf
+```
+
+It prints hours, usable minutes per label, windows per split, channel amplitude
+in microvolts, the share of clipped samples, and recordings that look unusual.
+Per-recording numbers go to `results/data_report_<dataset>-stride<N>.csv`.
 
 ## Sample run commands
 
@@ -272,7 +328,9 @@ The original runs (`../mia_bci/experiment1_out/`) give these averages:
 | file or folder | what it does |
 |---|---|
 | `config.py` | default training, attack and results settings |
-| `datasets/` | one file per dataset: loading, windowing, train/val/test split, normalization. `mobi.py` holds the MoBI settings (window, stride, participants) |
+| `datasets/` | one file per dataset: loading, windowing, train/val/test split, normalization. `mobi.py` holds the MoBI settings (window, stride, participants); `segments.py` is shared by the other three |
+| `prepare_data.py` | downloads or reads a raw dataset and writes `data/<dataset>/*.npz` |
+| `inspect_data.py` | data-quality report for a prepared dataset |
 | `models/` | one file per model, each with a `build()` function |
 | `attacks/` | one file per attack, each with a `scores()` function; `__init__.py` runs them and computes AUC and TPR |
 | `train.py` | training loop with early stopping; per-window logits, loss and accuracy |
