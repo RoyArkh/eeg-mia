@@ -225,8 +225,9 @@ results.
 
 On a model with one output for two classes, `loss`, `confidence` and
 `modified_entropy` all rank windows by the probability of the true class, so
-they always give the **same** AUC and TPR. Only `max_confidence` and `lira` can
-differ from `loss`.
+they give the **same** AUC and TPR. (`confidence` can differ in the 4th decimal:
+when the model is extremely sure, the probability rounds to exactly 1 and those
+windows tie.) Only `max_confidence` and `lira` can really differ from `loss`.
 
 **LiRA** trains `--shadows` extra models (64 by default) for **every** target
 model, so a run takes dozens of times longer. Each shadow model trains like the
