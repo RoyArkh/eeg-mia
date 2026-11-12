@@ -12,6 +12,7 @@ import attacks
 import datasets
 import pipeline
 import prepare_data
+import run_participant_sweep
 from datasets import segments, sleepedf, tuab
 from datasets.segments import SPLITS
 
@@ -134,12 +135,41 @@ def test_short_run_on_fake_sleep_data(tmp_path):
 @pytest.mark.parametrize("stride", [3000, 1500])
 def test_block_split_spreads_splits_and_shares_no_samples(stride):
     starts = np.arange(0, 3_000_000 - 3000 + 1, stride)        # ~8 h at 100 Hz
-    train, val, test = segments.split_by_blocks(starts, window=3000, block=60000, seed=7)
+    labels = ((starts // 360000) % 3 == 2).astype(int)           # "REM" every third hour
+    train, val, test = segments.split_by_blocks(starts, labels, window=3000, block=60000, seed=7)
     for earlier, later in [(train, val), (train, test), (val, test)]:
         a, b = starts[earlier][:, None], starts[later][None, :]
         assert ((a + 3000 <= b) | (b + 3000 <= a)).all()          # no shared samples
     for index in (val, test):
         assert 0.10 < len(index) / len(starts) < 0.20
         assert starts[index].min() < 1_000_000 and starts[index].max() > 2_000_000   # all night
-    again = segments.split_by_blocks(starts, window=3000, block=60000, seed=7)
+        assert 0.2 < labels[index].mean() < 0.45                                       # share ~1/3
+    again = segments.split_by_blocks(starts, labels, window=3000, block=60000, seed=7)
     assert all((x == y).all() for x, y in zip((train, val, test), again))
+
+
+def test_rare_label_reaches_every_split():
+    # one night where label 1 sits in only 4 of 48 blocks: every split must still get some
+    starts = np.arange(0, 48 * 60000, 3000)
+    labels = np.isin(starts // 60000, [5, 17, 30, 41]).astype(int)
+    for seed in range(20):
+        index_per_split = segments.split_by_blocks(starts, labels, window=3000, block=60000, seed=seed)
+        assert all(labels[index].sum() > 0 for index in index_per_split)
+
+
+def test_combinations_from_many_participants_are_quick_and_distinct():
+    participants = list(range(1, 104))     # like EEGMMIDB: up to 10^29 combinations
+    rng = np.random.default_rng(0)
+    for n in [2, 5, 10, 50, 100]:
+        combos = run_participant_sweep.choose_combinations(participants, n, 10, rng)
+        assert len(combos) == len(set(combos)) == 10
+        assert all(len(set(combo)) == n and set(combo) <= set(participants) for combo in combos)
+
+
+def test_excluded_participants_are_skipped(tmp_path):
+    write_fake_recordings(tmp_path, n_subjects=3)
+
+    class WithoutOne(datasets.SleepEDF):
+        excluded = [1]
+
+    assert WithoutOne(data_dir=str(tmp_path)).participants == [0, 2]

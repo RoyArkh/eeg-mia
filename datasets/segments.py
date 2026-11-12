@@ -92,25 +92,43 @@ def split_by_time(starts, window, min_windows=MIN_WINDOWS_TO_SPLIT):
     return train, val, test
 
 
-def split_by_blocks(starts, window, block, seed, min_windows=MIN_WINDOWS_TO_SPLIT):
+def split_by_blocks(starts, labels, window, block, seed, min_windows=MIN_WINDOWS_TO_SPLIT,
+                    n_candidates=200):
     """Indices of the train, val and test windows of one recording, split in blocks of time.
 
-    Blocks of `block` samples (by window start) go to train/val/test, 70/15/15 in a random
-    order fixed by `seed`. Where windows of two splits overlap, the train window is dropped
-    (or the val window, if val and test overlap), so no sample is in two splits.
+    Blocks of `block` samples (by window start) go to train/val/test, 70/15/15. Of
+    `n_candidates` random assignments (fixed by `seed`), the one is used whose splits are
+    closest to the recording's share of label 1: so that, for example, REM sleep is not
+    missing from the test blocks of a night by chance. Where windows of two splits
+    overlap, the train window is dropped (or the val window, if val and test overlap),
+    so no sample is in two splits.
     """
     n = len(starts)
     if n < min_windows:
         return np.arange(n), np.arange(0), np.arange(0)
-    block_of = starts // block
-    blocks = np.unique(block_of)
-    n_val = max(1, int(round(len(blocks) * VAL_FRACTION)))
-    n_test = max(1, int(round(len(blocks) * (1.0 - TRAIN_FRACTION - VAL_FRACTION))))
-    order = np.random.default_rng(seed).permutation(len(blocks))
-    split_of_block = np.zeros(len(blocks), dtype=int)          # 0 train, 1 val, 2 test
-    split_of_block[order[:n_val]] = 1
-    split_of_block[order[n_val:n_val + n_test]] = 2
-    split = split_of_block[np.searchsorted(blocks, block_of)]
+    block_of = np.searchsorted(np.unique(starts // block), starts // block)
+    n_blocks = block_of.max() + 1
+    n_val = max(1, int(round(n_blocks * VAL_FRACTION)))
+    n_test = max(1, int(round(n_blocks * (1.0 - TRAIN_FRACTION - VAL_FRACTION))))
+    windows_in_block = np.bincount(block_of, minlength=n_blocks)
+    label1_in_block = np.bincount(block_of, weights=labels == 1, minlength=n_blocks)
+    share = label1_in_block.sum() / n
+
+    rng = np.random.default_rng(seed)
+    best, best_error = None, np.inf
+    for _ in range(n_candidates):
+        order = rng.permutation(n_blocks)
+        split_of_block = np.zeros(n_blocks, dtype=int)          # 0 train, 1 val, 2 test
+        split_of_block[order[:n_val]] = 1
+        split_of_block[order[n_val:n_val + n_test]] = 2
+        error = 0.0
+        for k in range(3):
+            chosen = split_of_block == k
+            count = windows_in_block[chosen].sum()
+            error += abs(label1_in_block[chosen].sum() / count - share) if count else 1.0
+        if error < best_error:
+            best, best_error = split_of_block, error
+    split = best[block_of]
 
     keep = np.ones(n, dtype=bool)
     order = np.argsort(starts, kind="stable")
@@ -163,6 +181,7 @@ class PreparedDataset:
     time_split_unit = "recording"   # "recording" or "participant" (see the module docstring)
     block = None             # samples per block, for split_mode "blocks"
     default_counts = None    # participant counts for the participant sweep
+    excluded = ()            # participants left out (e.g. after the data check)
 
     def __init__(self, data_dir=None, stride=None, participants=None):
         self.data_dir = data_dir or default_data_dir(self.name)
@@ -176,7 +195,7 @@ class PreparedDataset:
         for path in files:
             with np.load(path) as npz:
                 subject = npz["subject"].item()
-                if wanted is not None and str(subject) not in wanted:
+                if subject in self.excluded or (wanted is not None and str(subject) not in wanted):
                     continue
                 fs = float(npz["fs"])
                 self.channels = [str(c) for c in npz["channels"]]
@@ -224,7 +243,8 @@ class PreparedDataset:
             positions = np.concatenate(positions)
             if self.split_mode == "blocks":
                 seed = zlib.crc32("+".join(rec.name for rec in group).encode())
-                index_per_split = split_by_blocks(positions, self.window, self.block, seed)
+                labels = np.array([lab for _, _, lab in items])
+                index_per_split = split_by_blocks(positions, labels, self.window, self.block, seed)
             else:
                 index_per_split = split_by_time(positions, self.window)
             for split, index in zip(SPLITS, index_per_split):

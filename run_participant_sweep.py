@@ -7,6 +7,8 @@ Results are saved as a new file in results/, re-written after every trained mode
 
 import argparse
 import itertools
+import math
+import sys
 
 import numpy as np
 
@@ -20,16 +22,33 @@ import train
 from attacks import lira
 
 
+MAX_LISTED = 100_000   # list every combination only when there are at most this many
+
+
 def choose_combinations(participants, n, max_combos, rng):
-    """All combinations of n participants, or `max_combos` random ones if there are more."""
-    all_combos = list(itertools.combinations(participants, n))
-    if len(all_combos) <= max_combos:
-        return all_combos
-    picked = rng.choice(len(all_combos), max_combos, replace=False)
-    return [all_combos[i] for i in sorted(picked)]
+    """All combinations of n participants, or `max_combos` random ones if there are more.
+
+    With few participants (MoBI: at most 462 combinations) every combination is listed and
+    `max_combos` are picked from the list. With many (EEGMMIDB, Sleep-EDF: up to 10^29) that
+    list would never finish, so random combinations are drawn until enough different ones
+    are found.
+    """
+    if math.comb(len(participants), n) <= MAX_LISTED:
+        all_combos = list(itertools.combinations(participants, n))
+        if len(all_combos) <= max_combos:
+            return all_combos
+        picked = rng.choice(len(all_combos), max_combos, replace=False)
+        return [all_combos[i] for i in sorted(picked)]
+    combos = []
+    while len(combos) < max_combos:
+        combo = tuple(participants[i] for i in sorted(rng.choice(len(participants), n, replace=False)))
+        if combo not in combos:
+            combos.append(combo)
+    return combos
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)   # show progress at once, also through `| tee`
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", default=config.DATASET, choices=list(datasets.DATASETS))
     parser.add_argument("--models", nargs="+", default=config.MODELS,
